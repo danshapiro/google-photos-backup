@@ -44,7 +44,7 @@ import StreamZip from 'node-stream-zip';
 
 const userDataDir = './session';
 const downloadPath = './download'
-const logErrorName = './logs/runtime-errors.log'
+const logErrorName = 'runtime-errors.log'
 const writeSidecarMetadata = true; //write the metadata to an XMP file
 const writeFileMetadata = true;  //modify the file to add metadata via EXIF
 const maxPics = 0; //For testing. End after grabbing this many URLs (0 for no max)
