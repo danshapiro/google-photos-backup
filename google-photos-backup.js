@@ -470,7 +470,6 @@ async function openOptionsPanel(page) {
 }
 
 // When the info panel is closed, open it
-//TODO: If there's an error, when you retry, reset the browser and page
 async function openInfoPanelIfClosed(page) {
   let isInfoPanelOpen;
   const closeButtonSelector = 'div.IMbeAf'; // This is the best selector to look for to see if it's open
@@ -855,14 +854,6 @@ async function get_page_html(page) {
     }
     return page_html;
   }
-}
-
-// TODO: Why isn't this called?
-async function logSkippedEntry(url, error) {
-  const logMessage = `Skipped URL: ${url}, Error: ${error}\n`
-  logger.info(logMessage)
-  await fsP.appendFile(failedDownloadLog, logMessage, 'utf-8')
-  debugger;
 }
 
 // Write the file's metadata to disk, either as a sidecar or to the file itself
