@@ -515,11 +515,12 @@ async function openInfoPanelIfClosed(page) {
 async function downloadPhoto(page, db) {
   const timeout = 120000; // 2 minutes in milliseconds
   let timeoutHandle;
+  const currentPageUrl = page.url(); 
 
   // Set up a promise that rejects after a timeout
   const timeoutPromise = new Promise((resolve) => { 
     timeoutHandle = setTimeout(() => {
-      logger.error('Download photo operation timed out');
+      logger.error(`Download photo operation timed out. URL: ${currentPageUrl}`);
       resolve({timeoutOccurred: true}); 
     }, timeout);
   });
@@ -528,7 +529,7 @@ async function downloadPhoto(page, db) {
   const operationPromise = (async () => {
     let infoPanelOpen = await openInfoPanelIfClosed(page);
       if (!infoPanelOpen) {
-        logger.error("The info panel couldn't be opened; something's awry. Move on to the next photo.");
+        logger.error(`The info panel couldn't be opened; something's awry. Move on to the next photo. URL: ${currentPageUrl}`);
         return {processedSuccessfully: false, timeoutOccurred: false}; 
       }
 
@@ -536,7 +537,7 @@ async function downloadPhoto(page, db) {
     try {
       downloadInfos = await downloadToTempLocation(page);
     } catch (error) {
-      logger.error(`Error downloading photo: ${error}`);
+      logger.error(`Error downloading photo: ${error}. URL: ${currentPageUrl}`);
       return {processedSuccessfully: false, timeoutOccurred: false}; 
     }
 
@@ -546,7 +547,7 @@ async function downloadPhoto(page, db) {
       const fileExtensionPhoto = path.extname(fileNamePhoto).toLowerCase();
 
       if (!validFileExtensions.includes(fileExtensionPhoto)) {
-        logger.error(`Invalid file extension for ${fileNamePhoto}. Skipping.`);
+        logger.error(`Invalid file extension for ${fileNamePhoto}. Skipping. URL: ${currentPageUrl}`);
         debugger;
         processedSuccessfully = false; // Mark as unsuccessful due to invalid file extension
         continue;
