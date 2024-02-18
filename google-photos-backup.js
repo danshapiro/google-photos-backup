@@ -55,7 +55,7 @@ const scrapeFiles = false; // if true, looks for which images are on disk. Not i
 const performIncrementalBackup = true; //Back up all the new URLs to disk. Usually do this.
 const debug = true; //halts on errors, writes out page html on each page to disk for debugging, etc
 const checkBackupThoroughness = 'unchecked' // 'unchecked', 'unchecked-and-no', 'all'
-const validFileExtensions = ['.avif', '.bmp', '.dng', '.gif', '.heic', '.ico', '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp', '.raw', '.3gp', '.3g2', '.asf', '.avi', '.divx', '.m2t', '.m2ts', '.m4v', '.mkv', '.mmv', '.mod', '.mov', '.mp4', '.mpg', '.mts', '.tod', '.wmv', '.zip'];
+const validFileExtensions = ['.avif', '.bmp', '.dng', '.gif', '.heic', '.ico', '.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp', '.raw', '.3gp', '.3g2', '.asf', '.avi', '.divx', '.m2t', '.m2ts', '.m4v', '.mkv', '.mmv', '.mod', '.mov', '.mp4', '.mpg', '.mts', '.nef', '.tod', '.wmv', '.zip'];
 
 import winston from 'winston';
 import DailyRotateFile from 'winston-daily-rotate-file';
@@ -540,22 +540,24 @@ async function downloadPhoto(page, db) {
       return {processedSuccessfully: false, timeoutOccurred: false}; 
     }
 
-    let processedSuccessfully = false;
+    let processedSuccessfully = true;
     for (const { download, tempDownloadPath } of downloadInfos) {
       const fileNamePhoto = await download.suggestedFilename();
       const fileExtensionPhoto = path.extname(fileNamePhoto).toLowerCase();
 
       if (!validFileExtensions.includes(fileExtensionPhoto)) {
         logger.error(`Invalid file extension for ${fileNamePhoto}. Skipping.`);
+        debugger;
+        processedSuccessfully = false; // Mark as unsuccessful due to invalid file extension
         continue;
       }
 
       if (fileExtensionPhoto === '.zip') {
         const zipProcessingResult = await processZipFile(db, tempDownloadPath, page);
-        processedSuccessfully = processedSuccessfully || zipProcessingResult;
+        processedSuccessfully = processedSuccessfully && zipProcessingResult;
       } else {
         const singleFileProcessingResult = await processSingleFile(db, tempDownloadPath, fileNamePhoto, page);
-        processedSuccessfully = processedSuccessfully || singleFileProcessingResult;
+        processedSuccessfully = processedSuccessfully && singleFileProcessingResult;
       }
     }
     return {processedSuccessfully, timeoutOccurred: false}; 
