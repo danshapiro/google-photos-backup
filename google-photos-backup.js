@@ -286,12 +286,14 @@ function convertExifDateTimeToISO(dateToConvert) {
 async function readMetadataFromFile(filePath) {
   const xmpFilePath = `${filePath}.xmp`;
 
-  if (!fs.existsSync(xmpFilePath)) {
-    logger.error(`XMP file not found for ${filePath}`);
-    return;
+  let metadata;
+  if (fs.existsSync(xmpFilePath)) {
+    metadata = await exiftool.read(xmpFilePath);
+  } else {
+    logger.info(`XMP file not found for ${filePath}, reading EXIF data instead.`);
+    metadata = await exiftool.read(filePath);
   }
 
-  const metadata = await exiftool.read(xmpFilePath);
   let url = metadata['Source'];
   let createDate = convertExifDateTimeToISO(metadata['CreateDate']);
   let dateTimeOriginal = convertExifDateTimeToISO(metadata['DateTimeOriginal']);
@@ -304,7 +306,7 @@ async function readMetadataFromFile(filePath) {
   }
 
   if (!url) {
-    logger.error(`URL not found in XMP file for ${filePath}`);
+    logger.error(`URL not found in metadata for ${filePath}`);
     return;
   }
 
