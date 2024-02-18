@@ -44,10 +44,8 @@ import StreamZip from 'node-stream-zip';
 
 const userDataDir = './session';
 const downloadPath = './download'
-const logName = './logs/google-photos-backup.log'
 const logErrorName = './logs/runtime-errors.log'
 const failedDownloadLog = './logs/Failed_Downloads.log' //dedicated log just for this
-const writeSidecarMetadata = true; //write the metadata to an XMP file
 const writeFileMetadata = true;  //modify the file to add metadata via EXIF
 const maxPics = 0; //For testing. End after grabbing this many URLs (0 for no max)
 const dropAndCreateFileTable = false; //will fully rescan the disk for backups. Takes ~1h.
@@ -80,7 +78,7 @@ function setupLogging() {
         level: 'debug'
       }),
       new winston.transports.File({
-        filename: 'logs/runtime-errors.log',
+        filename: 'logs/' + logErrorName,
         level: 'error'
       }),
       new winston.transports.Console({
