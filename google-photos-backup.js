@@ -461,7 +461,6 @@ async function openOptionsPanel(page) {
         return true;
       } else {
         logger.error(`Options panel failed to open.`);
-        debugger;
         return false;
       }
     } catch (error) {
@@ -648,7 +647,6 @@ async function dispatchMouseEvents(page, buttonSelector) {
     }
   } catch (error) {
     logger.error('Error simulating mousedown and mouseup events: ' + error);
-    debugger;
   }
 }
 
