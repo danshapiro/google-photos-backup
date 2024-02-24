@@ -96,11 +96,14 @@ const logger = setupLogging();
 logger.error('Logger started.\n\n\n'); //"error" level so that it shows up in both logs
 
 export { setupLogging }; // in case other modules want to use this later
+
+
 //record total runtime
 const startTime = Date.now();
 
 chromium.use(stealth());
-let browser = null; // Change const to let to allow reassignment
+let browser = null; 
+let page = null;
 
 async function launchBrowser() {
   browser = await chromium.launchPersistentContext(path.resolve(userDataDir), { 
@@ -110,16 +113,39 @@ async function launchBrowser() {
     args: ['--no-sandbox', '--disable-setuid-sandbox']
   });
 }
+
+// Navigate to a URL without resetting the browser or page
+async function navigateToUrl(url) {
+  let navigationSuccessful = true; // Assume navigation is successful unless proven otherwise
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded' }); // Navigate to the URL and wait for content to load
+  } catch (error) {
+    logger.error(`Failed to navigate to URL: ${url}. Error: ${error}`);
+    navigationSuccessful = false; // Update status if navigation fails
+  }
+  return navigationSuccessful; // Return the status of the navigation attempt
+};
+
+// Function to reset the browser and page, made global for accessibility
+async function resetBrowser(url = null) {
+  await browser.close();
+  await launchBrowser();
+  page = await browser.newPage();
+  if (url) {
+    const navigationSuccessful = await navigateToUrl(url); // Use navigateToUrl function to navigate to the URL
+    if (!navigationSuccessful) {
+      throw new Error(`Failed to navigate to URL in resetBrowser(): ${url}`);
+    }
+  }
+}
+
 // Add all photos from google photos to the db.
 // Go to the google photos homepage, keep clicking right arrow to select the next image, and stash each URL in the db.
 async function scrapeAllGooglePhotosUrls(maxPics, db) {
-  const page = await browser.newPage();
-  try {
-    await page.goto('https://photos.google.com');
-  } catch (error) {
-    logger.error(`Failed to navigate to https://photos.google.com. Error: ${error}`);
-    throw error; // Re-throw the error to handle it in the calling function
-  }
+  await resetBrowser('https://photos.google.com');
+  // After resetBrowser, we are guaranteed to have navigated successfully or thrown an error
+  logger.info('Successfully navigated to https://photos.google.com.');
+
   // Check if redirected to google.com/photos/about
   if (page.url() === 'https://www.google.com/photos/about/') {
     throw new Error("You don't appear to be logged in.\nFrom the command line, run 'node setup.js' in this directory. Log in, then close the browser. Then run this again.");
@@ -137,9 +163,25 @@ async function scrapeAllGooglePhotosUrls(maxPics, db) {
   const alreadyBackedUpCountMax = 10; //abort when you see this many photos in a row that are already backed up
 
   do {
-    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowRight');
     await page.waitForTimeout(100); // wait for the new image to load
-    const imageUrl = await page.evaluate(() => document.activeElement.toString())
+    let imageUrl = await page.evaluate(() => document.activeElement.toString());
+    let findUrlRetries = 3;
+
+    while (!imageUrl.startsWith('https://') && findUrlRetries > 0) {
+      logger.warn(`Expected imageUrl to start with 'https://', but got ${imageUrl}. Retrying in 3 seconds...`);
+      await page.waitForTimeout(3000); 
+      await page.keyboard.press('ArrowRight');
+      imageUrl = await page.evaluate(() => document.activeElement.toString());
+      findUrlRetries--;
+    }
+
+    if (typeof imageUrl !== 'string') {
+      logger.error(`Failed to obtain a valid imageUrl on the homepage after waiting 30s.`);
+      debugger;
+      continue; // Skip to the next iteration of the loop if still not a string
+    }
+
     logger.info(`Pic: ${imageUrl}`);
     // Check if imageUrl starts with 'https://photos.google.com/photo/'
     const url = new URL(imageUrl);
@@ -180,17 +222,6 @@ async function scrapeAllGooglePhotosUrls(maxPics, db) {
       break;
     }
   } while (sameUrlCount < sameUrlCountMax && alreadyBackedUpCount < alreadyBackedUpCountMax);
-};
-
-// Go to a URL and wait for it to load
-async function navigateToUrl(page, url) {
-  try {
-    await page.goto(url, { waitUntil: 'domcontentloaded' }); // Wait until the network is idle
-    return true; // Return true if the navigation is successful
-  } catch (error) {
-    logger.error(`Error navigating to URL: ${url}. Error: ` + error);
-    return false; // Return false if there is an error
-  }
 };
 
 // Add a DB operation to the queue
@@ -410,7 +441,7 @@ async function checkIfAllUrlsAreBackedUp(db, thoroughness = 'unchecked') {
 };
 
 // Find a selector on the page and return its visibility and enabled status
-async function findActiveSelector(page, selector) {
+async function findActiveSelector(selector) {
   const element = await page.$(selector);
   if (element) {
     const isVisible = await page.evaluate(el => el.offsetParent !== null, element);
@@ -427,7 +458,7 @@ async function findActiveSelector(page, selector) {
 }
 
 // Wait for a selector on the page to become visible and enabled, up to a specified timeout
-async function waitForActiveSelector(page, selector, timeout = 5000) {
+async function waitForActiveSelector(selector, timeout = 5000) {
   try {
     await page.waitForSelector(selector, { state: 'attached', timeout });
     const element = await page.$(selector);
@@ -448,15 +479,15 @@ async function waitForActiveSelector(page, selector, timeout = 5000) {
 }
 
 // When the info panel is closed, open it
-async function openOptionsPanel(page) {
+async function openOptionsPanel() {
   const selectorToLookFor = '[aria-label="Download - Shift+D"]';
-  let isOptionsPanelOpen = await findActiveSelector(page, selectorToLookFor);
+  let isOptionsPanelOpen = await findActiveSelector(selectorToLookFor);
   
   if (!isOptionsPanelOpen) {
     try {
-      await dispatchMouseEvents(page, 'div[data-tooltip="More options"]');
+      await dispatchMouseEvents('div[data-tooltip="More options"]');
       await page.waitForTimeout(2000); // It seems to need a hard wait, perhaps because of the animation? The next line doesn't do it.
-      isOptionsPanelOpen = await waitForActiveSelector(page, selectorToLookFor, 5000);
+      isOptionsPanelOpen = await waitForActiveSelector(selectorToLookFor, 5000);
       if (isOptionsPanelOpen) {
         return true;
       } else {
@@ -465,42 +496,38 @@ async function openOptionsPanel(page) {
       }
     } catch (error) {
       logger.error(`Failed to open 'More options': ${error}`);
-      debugger;
     }
   }
 }
 
-// When the info panel is closed, open it
-async function openInfoPanelIfClosed(page) {
-  let isInfoPanelOpen;
+// Global function to check if the info panel is open
+async function isInfoPanelOpen() {
   const closeButtonSelector = 'div.IMbeAf'; // This is the best selector to look for to see if it's open
-
-  // Set a timeout for the entire operation
-  const timeoutPromise = new Promise((_, reject) => {
-    setTimeout(() => reject(new Error('Operation timed out')), 20000); // 20 seconds
-  });
-
-  //see if it's open already
   try {
-    await Promise.race([
-      (async () => {
-        await page.waitForSelector(closeButtonSelector, { state: 'attached', timeout: 5000 });
-        isInfoPanelOpen = true;
-      })(),
-      timeoutPromise
-    ]);
+    await page.waitForSelector(closeButtonSelector, { state: 'attached', timeout: 5000 });
+    return true;
   } catch (error) {
     logger.debug(`Info panel is closed (did not find selector): ${error}`);
-    isInfoPanelOpen = false;
+    return false;
   }
-  if (!isInfoPanelOpen) {
-    logger.debug("Couldn't open it with the selector. Try pressing 'i'.")
+}
+
+// When the info panel is closed, open it
+async function openInfoPanelIfClosed() {
+  let isOpen = await isInfoPanelOpen();
+  if (!isOpen) {
+    logger.debug("Couldn't open it with the selector. Try pressing 'i'.");
     try {
+      // Set a timeout for the entire operation
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timed out')), 20000); // 20 seconds
+      });
+
       await Promise.race([
         (async () => {
           await page.keyboard.press('i');
-          console.log('Pressed i to open info panel')
-          await page.waitForSelector(closeButtonSelector, { state: 'attached', timeout: 5000 }); // wait 5s
+          console.log('Pressed i to open info panel');
+          isOpen = await isInfoPanelOpen(); // Re-check if the info panel is open after pressing 'i'
         })(),
         timeoutPromise
       ]);
@@ -509,11 +536,11 @@ async function openInfoPanelIfClosed(page) {
       return false;
     }
   }
-  return true;
+  return isOpen;
 }
 
 // Download the photo to a temp location, get its metadata, check if it's a duplicate, write the file and metadata to disk, then add the file on disk to the db.
-async function downloadPhoto(page, db) {
+async function downloadPhoto(db) {
   const timeout = 120000; // 2 minutes in milliseconds
   let timeoutHandle;
   const currentPageUrl = page.url(); 
@@ -528,7 +555,7 @@ async function downloadPhoto(page, db) {
 
   // Use Promise.race to handle the timeout
   const operationPromise = (async () => {
-    let infoPanelOpen = await openInfoPanelIfClosed(page);
+    let infoPanelOpen = await openInfoPanelIfClosed();
       if (!infoPanelOpen) {
         logger.error(`The info panel couldn't be opened; something's awry. Move on to the next photo. URL: ${currentPageUrl}`);
         return {processedSuccessfully: false, timeoutOccurred: false}; 
@@ -536,7 +563,7 @@ async function downloadPhoto(page, db) {
 
     let downloadInfos;
     try {
-      downloadInfos = await downloadToTempLocation(page);
+      downloadInfos = await downloadToTempLocation();
     } catch (error) {
       logger.error(`Error downloading photo: ${error}. URL: ${currentPageUrl}`);
       return {processedSuccessfully: false, timeoutOccurred: false}; 
@@ -555,10 +582,10 @@ async function downloadPhoto(page, db) {
       }
 
       if (fileExtensionPhoto === '.zip') {
-        const zipProcessingResult = await processZipFile(db, tempDownloadPath, page);
+        const zipProcessingResult = await processZipFile(db, tempDownloadPath);
         processedSuccessfully = processedSuccessfully && zipProcessingResult;
       } else {
-        const singleFileProcessingResult = await processSingleFile(db, tempDownloadPath, fileNamePhoto, page);
+        const singleFileProcessingResult = await processSingleFile(db, tempDownloadPath, fileNamePhoto);
         processedSuccessfully = processedSuccessfully && singleFileProcessingResult;
       }
     }
@@ -571,7 +598,7 @@ async function downloadPhoto(page, db) {
   return result;
 }
 
-async function processZipFile(db, zipFilePath, page) {
+async function processZipFile(db, zipFilePath) {
   const zip = new StreamZip.async({ file: zipFilePath });
   const entries = await zip.entries();
   let processedSuccessfully = false;
@@ -583,7 +610,7 @@ async function processZipFile(db, zipFilePath, page) {
 
     const tempDownloadPath = path.join(path.dirname(zipFilePath), entry.name);
     await zip.extract(entry.name, tempDownloadPath);
-    const processResult = await processSingleFile(db, tempDownloadPath, entry.name, page);
+    const processResult = await processSingleFile(db, tempDownloadPath, entry.name);
     processedSuccessfully = processedSuccessfully || processResult;
   }
 
@@ -592,8 +619,8 @@ async function processZipFile(db, zipFilePath, page) {
   return processedSuccessfully;
 }
 
-async function processSingleFile(db, tempDownloadPath, filename, page) {
-  const metadata = await extractMetadataFromPage(page, tempDownloadPath, filename);
+async function processSingleFile(db, tempDownloadPath, filename) {
+  const metadata = await extractMetadataFromPage(tempDownloadPath, filename);
   if (!metadata) {
     logger.error(`Failed to extract metadata for ${filename}.`);
     return false;
@@ -602,8 +629,8 @@ async function processSingleFile(db, tempDownloadPath, filename, page) {
   const { year, month, dateTimeOriginal, people, description } = metadata;
   let finalPath = path.join(downloadPath, year.toString(), month.toString(), filename);
 
-  finalPath = await handleDuplicateFiles(finalPath, tempDownloadPath, page, filename, year, month);
-  await writeMetadataToFile(page, finalPath, people, page.url(), dateTimeOriginal, description, writeSidecarMetadata, writeFileMetadata);
+  finalPath = await handleDuplicateFiles(finalPath, tempDownloadPath, filename, year, month);
+  await writeMetadataToFile(finalPath, people, page.url(), dateTimeOriginal, description, writeSidecarMetadata, writeFileMetadata);
   
   await addFileToDb(finalPath, db);
 
@@ -611,7 +638,7 @@ async function processSingleFile(db, tempDownloadPath, filename, page) {
 }
 
 // Dispatch mouse events to the first clickable and visible selector found (in case of multiples).
-async function dispatchMouseEvents(page, buttonSelector) {
+async function dispatchMouseEvents(buttonSelector) {
   try {
     // Find all buttons matching the selector
     const buttons_matching_selector = await page.$$(buttonSelector);
@@ -643,7 +670,7 @@ async function dispatchMouseEvents(page, buttonSelector) {
       }, actionableButton);
     } else {
       logger.error(`No visible and enabled button found for selector: ${buttonSelector}`);
-      debugger;
+      debugger; //TODO: consider removing
     }
   } catch (error) {
     logger.error('Error simulating mousedown and mouseup events: ' + error);
@@ -651,15 +678,11 @@ async function dispatchMouseEvents(page, buttonSelector) {
 }
 
 // Open More Options, try to download all versions available, return the path to the temp download location
-async function downloadToTempLocation(page) {
-
-  // Initialize an array to hold promises for each download event
-  const downloadPromises = [];
+async function downloadToTempLocation() {
   let downloadInfos = [];
+  const urlToDownloadFrom = page.url();
 
-  await page.waitForTimeout(1000); // The page seems to need 1s to finish rendering before we click
-
-  /// Define the various download buttons
+  // Define the various download buttons
   const downloadSelectors = [
     '[aria-label^="Download all "]',
     '[aria-label="Download original"]',
@@ -669,36 +692,31 @@ async function downloadToTempLocation(page) {
 
   // Iterate over each selector to handle multiple downloads
   for (const selector of downloadSelectors) {
-    await openOptionsPanel(page);
+    await openOptionsPanel();
     const dlButtons = await page.$$(selector);
     if (dlButtons.length > 0) {
-      logger.info(`Downloading from: ${selector}`);
+      logger.info(`Attempting download from: ${selector}`);
       // Click the button to trigger the download
-      await dispatchMouseEvents(page, selector);
+      await dispatchMouseEvents(selector);
 
-      // Prepare to wait for the download event
-      const downloadPromise = page.waitForEvent('download', { timeout: 60000 }).then(download => {
-        return download.path().then(path => ({ download, tempDownloadPath: path }));
-      }).catch(error => {
-        logger.error(`Error waiting for download completion: ${error}`);
-        debugger;
-      });
-      // Add the promise to the array
-      downloadPromises.push(downloadPromise);
-      // Wait for the download to finish
-      await downloadPromise;
+      // Wait for the download to start with a timeout of 5 seconds for the download to initiate
+      try {
+        const download = await page.waitForEvent('download', { timeout: 5000 });
+        // Once the download has started, wait up to 60 seconds for it to complete
+        const downloadPath = await download.path({ timeout: 60000 });
+        downloadInfos.push({ download, tempDownloadPath: downloadPath });
+        logger.info("Download started and path received!");
+      } catch (error) {
+        // Reset and move to the next selector
+        logger.error(`Download did not start or complete in time for selector: ${selector} from URL: ${urlToDownloadFrom}. Skipping to next selector; this will not be backed up. Error: ${error}`);
+        await resetBrowser(urlToDownloadFrom); 
+      }
     }
   }
-  if (downloadPromises.length === 0) {
-    logger.error('Did not download successfully.');
-    debugger;
-  }
-  // Wait for all download promises to resolve
-  try {
-    downloadInfos = await Promise.all(downloadPromises);
-  } catch (error) {
-    logger.error(`There was an error while downloading: ${error}`);
-    debugger;
+
+  if (downloadInfos.length === 0) {
+    logger.error('No downloads were initiated or completed successfully.');
+    // Consider adding additional error handling or recovery logic here
   }
 
   // Filter out any undefined or null results
@@ -706,7 +724,7 @@ async function downloadToTempLocation(page) {
 }
 
 // Examine the page hosting the image and return the metadata that's shown onscreen
-async function extractMetadataFromPage(page, tempDownloadPath, filename) {
+async function extractMetadataFromPage(tempDownloadPath, filename) {
   const exifData = await exiftool.read(tempDownloadPath);
   let year = exifData.DateTimeOriginal?.year || 1;
   let month = exifData.DateTimeOriginal?.month || 1;
@@ -795,7 +813,7 @@ async function extractMetadataFromPage(page, tempDownloadPath, filename) {
 }
 
 // If a file is downloaded with the same name as an existing file, check to see if the existing file has the same source URL. If it does, overwrite the existing file with the new one. If it doesn't, write it out with a new filename by appending a number. 
-async function handleDuplicateFiles(finalPath, tempDownloadPath, page, fileName, year, month) {
+async function handleDuplicateFiles(finalPath, tempDownloadPath, fileName, year, month) {
   let counter = 1;
   let fileExists = true;
   let newFileName; // Declare newFileName here
@@ -845,22 +863,8 @@ async function deleteFileIfExists(filePath) {
   }
 }
 
-async function get_page_html(page) {
-  if (debug) {
-    let page_html = `<!-- URL: ${page.url()} -->\n\n`;
-    page_html += await page.content();
-    try {
-      await fsP.writeFile('debug_html.html', page_html);
-    } catch (error) {
-      logger.error(`Error writing to file: ${error}`);
-      debugger;
-    }
-    return page_html;
-  }
-}
-
 // Write the file's metadata to disk, either as a sidecar or to the file itself
-async function writeMetadataToFile(page, finalPath, people, url, dateTimeOriginal, description, writeSidecarMetadata, writeFileMetadata) {
+async function writeMetadataToFile(finalPath, people, url, dateTimeOriginal, description, writeSidecarMetadata, writeFileMetadata) {
   logger.debug("Trying to write metadata to file: "+finalPath);
   const fileTypesWithoutExif = ['.avi', '.bmp', '.wmv', '.mts', '.dng', '.zip'];
   if (writeFileMetadata || writeSidecarMetadata) {
@@ -962,31 +966,30 @@ async function incrementalBackup(db) {
   const maxRetries = 3;
   let photo = true;
   let downloadFailed;
-  let page = await browser.newPage();
+  await resetBrowser(); 
   while (photo) {
     // Retrieve the most recently scraped URL that hasn't been backed up yet
+    downloadFailed = true; // Assume failure until proven otherwise
     photo = await db.get(`SELECT url FROM googlePhotosUrls WHERE isBackedUp = 'no' ORDER BY retrieved_on DESC LIMIT 1`);
     if (!photo) {
       break; // Exit the loop if there are no more photos to back up
     }
     logger.info(`Downloading: ${photo.url}`);
-    var navigationSuccessful = await navigateToUrl(page, photo.url);
+    const navigationSuccessful = await navigateToUrl(photo.url);
     if (navigationSuccessful) {
-      downloadFailed = true; // Assume failure until proven otherwise
-      for (let i = 0; i < maxRetries; i++) {
-        const {processedSuccessfully, timeoutOccurred} = await downloadPhoto(page, db);
+      for (let retryNumber = 0; retryNumber < maxRetries; retryNumber++) {
+        const {processedSuccessfully, timeoutOccurred} = await downloadPhoto(db);
 
         if (processedSuccessfully) {
           downloadFailed = false;
           break; // Success, no need to retry
         } else {
-          logger.error(`Issue encountered (timeout or other) for URL: ${photo.url}. Resetting browser and retrying (${i+1}/${maxRetries}).`);
-          await browser.close();
-          await launchBrowser();
-          page = await browser.newPage();
-          navigationSuccessful = await navigateToUrl(page, photo.url); // Reassign and test navigationSuccessful here
-          if (!navigationSuccessful) {
-            logger.error(`Failed to navigate to URL: ${photo.url} after retrying. Moving to the next photo.`);
+          logger.error(`downloadPhoto failed on try ${retryNumber+1}/${maxRetries} for URL: ${photo.url}.`);
+          logger.error(`Status - processedSuccessfully: ${processedSuccessfully}, timeoutOccurred: ${timeoutOccurred}`);
+          try {
+            page = await resetBrowser(photo.url); 
+          } catch (error) {
+            logger.error(`Couldn't navigate to URL: ${photo.url} after ${retryNumber+1} tries. Error: ${error.message}`);
             downloadFailed = true; // Ensure downloadFailed reflects navigation failure
             break; // Exit retry loop if navigation fails
           }
@@ -994,14 +997,13 @@ async function incrementalBackup(db) {
       }
     } else {
       downloadFailed = true;
-      logger.error(`Failed to navigate to URL: ${photo.url}. Skipping this photo.`);
+      logger.error(`Did not navigate to URL: ${photo.url}. Skipping this photo.`);
       debugger;
     }
     // Check if the file exists in the db and mark the image as backed up if so. If it failed, mark it as error.
     await updateUrlBackupStatus(photo.url, db, downloadFailed);
   }
 };
-
 
 async function validateDatabase(db) {
   let isValid = true;
