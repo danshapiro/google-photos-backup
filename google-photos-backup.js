@@ -139,6 +139,27 @@ async function resetBrowser(url = null) {
   }
 }
 
+// Function to reset the current tab and optionally navigate to a new URL
+async function resetPage(url = null) {
+  logger.info(`Resetting page. Requested URL: ${url}`);
+  const originalUrl = page.url();
+  // Close the current tab & create a new one
+  await page.close();
+  page = await browser.newPage();
+  // If a URL is provided, navigate to it. Otherwise, navigate to the original URL.
+  if (url) {
+    const navigationSuccessful = await navigateToUrl(url); // Use navigateToUrl function to navigate to the URL
+    if (!navigationSuccessful) {
+      throw new Error(`Failed to navigate to new URL in resetPage(): ${url}`);
+    }
+  } else {
+    const navigationSuccessful = await navigateToUrl(originalUrl);
+    if (!navigationSuccessful) {
+      throw new Error(`Failed to refresh the current page in resetPage(): ${originalUrl}`);
+    }
+  }
+}
+
 // Add all photos from google photos to the db.
 // Go to the google photos homepage, keep clicking right arrow to select the next image, and stash each URL in the db.
 async function scrapeAllGooglePhotosUrls(maxPics, db) {
@@ -709,7 +730,7 @@ async function downloadToTempLocation() {
       } catch (error) {
         // Reset and move to the next selector
         logger.error(`Download did not start or complete in time for selector: ${selector} from URL: ${urlToDownloadFrom}. Skipping to next selector; this will not be backed up. Error: ${error}`);
-        await resetBrowser(urlToDownloadFrom); 
+        await resetPage(urlToDownloadFrom); 
       }
     }
   }
@@ -987,7 +1008,7 @@ async function incrementalBackup(db) {
           logger.error(`downloadPhoto failed on try ${retryNumber+1}/${maxRetries} for URL: ${photo.url}.`);
           logger.error(`Status - processedSuccessfully: ${processedSuccessfully}, timeoutOccurred: ${timeoutOccurred}`);
           try {
-            page = await resetBrowser(photo.url); 
+            page = await resetPage(photo.url); 
           } catch (error) {
             logger.error(`Couldn't navigate to URL: ${photo.url} after ${retryNumber+1} tries. Error: ${error.message}`);
             downloadFailed = true; // Ensure downloadFailed reflects navigation failure
